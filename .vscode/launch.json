@@ -1,0 +1,124 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Debug InMemoryDemo",
+            "target": "InMemoryDemo",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug InMemoryDemo"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Release InMemoryDemo",
+            "target": "InMemoryDemo",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release InMemoryDemo"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Debug CounterService",
+            "target": "CounterService",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug CounterService"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Release CounterService",
+            "target": "CounterService",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release CounterService"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Debug CounterClient",
+            "target": "CounterClient",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug CounterClient"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Release CounterClient",
+            "target": "CounterClient",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release CounterClient"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Debug ChatService",
+            "target": "ChatService",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug ChatService"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Release ChatService",
+            "target": "ChatService",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release ChatService"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Debug ChatClient",
+            "target": "ChatClient",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug ChatClient"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda}",
+            "name": "Release ChatClient",
+            "target": "ChatClient",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release ChatClient"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda copy}",
+            "name": "Debug ExifServiceExample",
+            "target": "ExifServiceExample",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug ExifServiceExample"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:sda copy}",
+            "name": "Release ExifServiceExample",
+            "target": "ExifServiceExample",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release ExifServiceExample"
+        }
+    ]
+}

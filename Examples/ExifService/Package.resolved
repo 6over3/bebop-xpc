@@ -1,0 +1,15 @@
+{
+  "originHash" : "539605144e8dcac1d4102400fc3aec39a3dc86464eb7652b2dfdd6c09c91a062",
+  "pins" : [
+    {
+      "identity" : "libexif",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/6over3/libexif",
+      "state" : {
+        "branch" : "main",
+        "revision" : "35e412e7c4298daa8bf0a3d8cab3fdefed246532"
+      }
+    }
+  ],
+  "version" : 3
+}

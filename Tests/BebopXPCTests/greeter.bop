@@ -1,0 +1,39 @@
+import "bebop/decorators.bop"
+
+struct HelloRequest {
+  name: string;
+}
+
+struct HelloReply {
+  greeting: string;
+}
+
+struct TickRequest {
+  count: uint32;
+}
+
+struct TickReply {
+  seq: uint32;
+  timestamp: string;
+}
+
+struct LogEntry {
+  line: string;
+}
+
+struct LogSummary {
+  totalLines: uint32;
+  preview: string;
+}
+
+/// A greeting service similar to gRPC's helloworld example.
+service Greeter {
+  /// Send a greeting and receive a reply.
+  SayHello(HelloRequest): HelloReply;
+  /// Request a stream of periodic ticks.
+  StreamTicks(TickRequest): stream TickReply;
+  /// Upload log lines and get a summary.
+  UploadLogs(stream LogEntry): LogSummary;
+  /// Bidirectional chat: send names, receive greetings.
+  Chat(stream HelloRequest): stream HelloReply;
+}

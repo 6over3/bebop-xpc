@@ -1,0 +1,15 @@
+import "bebop/decorators.bop"
+
+struct ReadRequest {
+    path: string;
+}
+
+message ReadResponse {
+    path(1): string;
+    json(2): string;
+    error(3): string;
+}
+
+service ExifService {
+    Read(ReadRequest): ReadResponse;
+}

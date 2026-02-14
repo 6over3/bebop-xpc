@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bebop.example.exif</string>
+    <key>Program</key>
+    <string>/usr/local/bin/ExifServiceExample</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/ExifServiceExample</string>
+        <string>--server</string>
+    </array>
+    <key>MachServices</key>
+    <dict>
+        <key>com.bebop.example.exif</key>
+        <true/>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/com.bebop.example.exif.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.bebop.example.exif.err.log</string>
+</dict>
+</plist>
