@@ -9,14 +9,14 @@ let package = Package(
     .executable(name: "ExifServiceExample", targets: ["ExifServiceExample"]),
   ],
   dependencies: [
-    .package(path: "../bebop-vnext"),
+    .package(url: "https://github.com/6over3/bebop-next", branch: "rpc"),
     .package(url: "https://github.com/6over3/libexif", branch: "main"),
   ],
   targets: [
     .target(
       name: "BebopXPC",
       dependencies: [
-        .product(name: "SwiftBebop", package: "bebop-vnext")
+        .product(name: "SwiftBebop", package: "bebop-next")
       ],
       path: "Sources/BebopXPC"
     ),
