@@ -231,19 +231,18 @@ public struct ExifServiceClient<C: BebopChannel>: Sendable {
   public func read(
     _ request: ReadRequest,
     options: CallOptions = .default
-  ) async throws -> ReadResponse {
-    let data = try await channel.unary(
+  ) async throws -> Reply<ReadResponse, C.Metadata> {
+    try await channel.unary(
       method: 0xAFE7_7597,
       request: request.serializedData(),
       options: options
-    )
-    return try ReadResponse.decode(from: data)
+    ).map { try ReadResponse.decode(from: $0) }
   }
 
   public func read(
     path: String,
     options: CallOptions = .default
-  ) async throws -> ReadResponse {
+  ) async throws -> Reply<ReadResponse, C.Metadata> {
     try await read(ReadRequest(path: path), options: options)
   }
 }

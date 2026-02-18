@@ -71,7 +71,7 @@ func runClient(paths: [String]) async throws {
     let filename = (path as NSString).lastPathComponent
 
     let rpcStart = ContinuousClock.now
-    let response = try await client.read(ReadRequest(path: path))
+    let response = try await client.read(ReadRequest(path: path)).value
     let rpcTime = rpcStart.duration(to: .now)
 
     if let json = response.json {

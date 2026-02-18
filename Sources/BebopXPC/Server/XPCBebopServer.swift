@@ -18,18 +18,15 @@ public final class XPCBebopServer: @unchecked Sendable {
 
   // MARK: - Public listen methods
 
-  /// Listen on a named XPC or Mach service.
   public func listen(service name: String) throws {
     let listener = try createListener(name: name)
     _listener.withLock { $0 = listener }
   }
 
-  /// Listen as a launchd Mach service (alias for `listen(service:)`).
   public func listen(machService name: String) throws {
     try listen(service: name)
   }
 
-  /// Create an anonymous listener and return its endpoint for testing per TN3113.
   public func listenAnonymous() throws -> XPCEndpoint {
     let listener = XPCListener(incomingSessionHandler: { [self] request in
       self.acceptConnection(request)
@@ -38,7 +35,6 @@ public final class XPCBebopServer: @unchecked Sendable {
     return listener.endpoint
   }
 
-  /// Stop the listener and cancel all active connections.
   public func stop() {
     let listener = _listener.withLock { l -> XPCListener? in
       let current = l
@@ -67,8 +63,6 @@ public final class XPCBebopServer: @unchecked Sendable {
 
   // MARK: - Per-connection state
 
-  /// Wraps per-connection mutable state so it can be captured by escaping closures.
-  /// Mutex is ~Copyable, so it cannot be captured directly.
   private final class ConnectionBox: Sendable {
     let collectors = Mutex<[UInt32: FrameCollector]>([:])
     let session = Mutex<XPCSession?>(nil)
@@ -84,19 +78,30 @@ public final class XPCBebopServer: @unchecked Sendable {
     _connections.withLock { $0.append(box) }
 
     let (decision, session) = request.accept(
-      incomingMessageHandler: { [self] (message: XPCReceivedMessage) -> (any Encodable)? in
-        guard let data = try? message.decode(as: Data.self),
-          let envelope = try? RpcEnvelope.decode(from: data)
-        else {
+      incomingMessageHandler: { [self] (message: XPCDictionary) -> XPCDictionary? in
+        guard let envelope = try? RpcEnvelope.fromMessage(message) else {
           Log.rpc.error("failed to decode RpcEnvelope")
           return nil
         }
 
         if envelope.isHeader {
-          guard let header = try? CallHeader.decode(from: envelope.payload) else {
+          guard let header = try? CallHeader.decode(from: envelope.payload),
+                let methodId = header.methodId else {
             Log.rpc.error("failed to decode CallHeader for call \(envelope.callId)")
             return nil
           }
+
+          let reader = message.withUnsafeUnderlyingDictionary { xdict in
+            XPCMessage.Reader(xdict)
+          }
+
+          let ctx = XPCCallContext(
+            methodId: methodId,
+            metadata: header.metadata ?? [:],
+            deadline: header.deadline,
+            message: reader
+          )
+
           let collector = FrameCollector()
           box.collectors.withLock { $0[envelope.callId] = collector }
           let callId = envelope.callId
@@ -106,6 +111,7 @@ public final class XPCBebopServer: @unchecked Sendable {
             await self.dispatchCall(
               callId: callId,
               header: header,
+              ctx: ctx,
               collector: collector,
               session: session,
               box: box,
@@ -149,14 +155,13 @@ public final class XPCBebopServer: @unchecked Sendable {
   private func dispatchCall(
     callId: UInt32,
     header: CallHeader,
+    ctx: XPCCallContext,
     collector: FrameCollector,
     session: XPCSession,
     box: ConnectionBox,
     router: BebopRouter<XPCCallContext>
   ) async {
     defer { box.collectors.withLock { $0[callId] = nil } }
-
-    let methodId = header.methodId ?? 0
 
     if let deadline = header.deadline, deadline.isPast {
       try? sendError(
@@ -165,24 +170,18 @@ public final class XPCBebopServer: @unchecked Sendable {
       return
     }
 
-    let ctx = XPCCallContext(
-      methodId: methodId,
-      metadata: header.metadata ?? [:],
-      deadline: header.deadline
-    )
-
     await withTaskCancellationHandler {
       do {
         if let deadline = header.deadline {
           try await withDeadline(deadline) {
             try await self.executeMethod(
-              callId: callId, methodId: methodId, ctx: ctx,
+              callId: callId, methodId: ctx.methodId, ctx: ctx,
               collector: collector, session: session, router: router
             )
           }
         } else {
           try await executeMethod(
-            callId: callId, methodId: methodId, ctx: ctx,
+            callId: callId, methodId: ctx.methodId, ctx: ctx,
             collector: collector, session: session, router: router
           )
         }
@@ -209,7 +208,6 @@ public final class XPCBebopServer: @unchecked Sendable {
     session: XPCSession,
     router: BebopRouter<XPCCallContext>
   ) async throws {
-    // Batch (1) and discovery (0) are synthetic unary methods handled by the router
     if methodId <= 1 {
       let payload = try await readOnePayload(from: collector)
       let response = try await router.unary(methodId: methodId, payload: payload, ctx: ctx)
@@ -276,9 +274,13 @@ public final class XPCBebopServer: @unchecked Sendable {
     return []
   }
 
+  private func sendMessage(_ envelope: RpcEnvelope, to session: XPCSession) throws {
+    try session.send(message: envelope.toMessage())
+  }
+
   private func sendFrame(callId: UInt32, to session: XPCSession, bytes: [UInt8]) throws {
     let envelope = RpcEnvelope.frame(callId: callId, payload: bytes)
-    try session.send(envelope.toData())
+    try sendMessage(envelope, to: session)
   }
 
   private func sendError(callId: UInt32, to session: XPCSession, error: BebopRpcError) throws {
@@ -289,23 +291,33 @@ public final class XPCBebopServer: @unchecked Sendable {
   private func sendResponse(
     callId: UInt32, to session: XPCSession, payload: [UInt8], ctx: XPCCallContext
   ) throws {
-    let metadata = ctx.responseMetadata
-    if metadata.isEmpty {
-      try sendFrame(callId: callId, to: session, bytes: FrameWriter.endStream(payload))
-    } else {
-      try sendFrame(callId: callId, to: session, bytes: FrameWriter.data(payload))
-      try sendFrame(callId: callId, to: session, bytes: FrameWriter.trailer(metadata))
-    }
+    let bytes = FrameWriter.endStream(payload)
+    let envelope = RpcEnvelope.frame(callId: callId, payload: bytes)
+    let dict = envelope.toMessage()
+    applyResponseMetadata(dict, ctx: ctx)
+    try session.send(message: dict)
   }
 
   private func sendEndOfStream(
     callId: UInt32, to session: XPCSession, ctx: XPCCallContext
   ) throws {
+    let bytes = FrameWriter.endStream([])
+    let envelope = RpcEnvelope.frame(callId: callId, payload: bytes)
+    let dict = envelope.toMessage()
+    applyResponseMetadata(dict, ctx: ctx)
+    try session.send(message: dict)
+  }
+
+  private func applyResponseMetadata(_ dict: XPCDictionary, ctx: XPCCallContext) {
     let metadata = ctx.responseMetadata
-    if metadata.isEmpty {
-      try sendFrame(callId: callId, to: session, bytes: FrameWriter.endStream([]))
-    } else {
-      try sendFrame(callId: callId, to: session, bytes: FrameWriter.trailer(metadata))
+    let prepareResponse = ctx.responsePreparer
+    guard !metadata.isEmpty || prepareResponse != nil else { return }
+    dict.withUnsafeUnderlyingDictionary { xdict in
+      let writer = XPCMessage.Writer(xdict)
+      for (key, value) in metadata {
+        writer.setString("m.\(key)", value)
+      }
+      prepareResponse?(writer)
     }
   }
 

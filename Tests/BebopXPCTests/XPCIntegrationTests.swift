@@ -79,7 +79,7 @@ func makeGreeterPair() throws -> (server: XPCBebopServer, client: GreeterClient<
     }
 
     let reply = try await client.sayHello(name: "World")
-    #expect(reply.greeting == "Hello, World!")
+    #expect(reply.value.greeting == "Hello, World!")
   }
 
   @Test(.timeLimit(.minutes(1))) func streamTicks() async throws {
@@ -109,7 +109,7 @@ func makeGreeterPair() throws -> (server: XPCBebopServer, client: GreeterClient<
       try await send(LogEntry(line: "first line"))
       try await send(LogEntry(line: "second line"))
       try await send(LogEntry(line: "third line"))
-    }
+    }.value
     #expect(summary.totalLines == 3)
     #expect(summary.preview == "first line")
   }

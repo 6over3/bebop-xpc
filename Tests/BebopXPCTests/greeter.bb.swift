@@ -474,19 +474,18 @@ public struct GreeterClient<C: BebopChannel>: Sendable {
   public func sayHello(
     _ request: HelloRequest,
     options: CallOptions = .default
-  ) async throws -> HelloReply {
-    let data = try await channel.unary(
+  ) async throws -> Reply<HelloReply, C.Metadata> {
+    try await channel.unary(
       method: 0x77AF_FF05,
       request: request.serializedData(),
       options: options
-    )
-    return try HelloReply.decode(from: data)
+    ).map { try HelloReply.decode(from: $0) }
   }
 
   public func sayHello(
     name: String,
     options: CallOptions = .default
-  ) async throws -> HelloReply {
+  ) async throws -> Reply<HelloReply, C.Metadata> {
     try await sayHello(HelloRequest(name: name), options: options)
   }
 
@@ -494,19 +493,18 @@ public struct GreeterClient<C: BebopChannel>: Sendable {
   public func streamTicks(
     _ request: TickRequest,
     options: CallOptions = .default
-  ) async throws -> AsyncThrowingStream<TickReply, Error> {
-    let raw = try await channel.serverStream(
+  ) async throws -> StreamReply<TickReply, C.Metadata> {
+    try await channel.serverStream(
       method: 0x59C9_211D,
       request: request.serializedData(),
       options: options
-    )
-    return raw.decode(TickReply.self)
+    ).map { try TickReply.decode(from: $0) }
   }
 
   public func streamTicks(
     count: UInt32,
     options: CallOptions = .default
-  ) async throws -> AsyncThrowingStream<TickReply, Error> {
+  ) async throws -> StreamReply<TickReply, C.Metadata> {
     try await streamTicks(TickRequest(count: count), options: options)
   }
 
@@ -516,13 +514,13 @@ public struct GreeterClient<C: BebopChannel>: Sendable {
     body: (
       _ send: @Sendable (LogEntry) async throws -> Void
     ) async throws -> Void
-  ) async throws -> LogSummary {
+  ) async throws -> Reply<LogSummary, C.Metadata> {
     let (rawSend, rawFinish) = try await channel.clientStream(
       method: 0x1F02_4C8C,
       options: options
     )
     try await body({ try await rawSend($0.serializedData()) })
-    return try await LogSummary.decode(from: rawFinish())
+    return try await rawFinish().map { try LogSummary.decode(from: $0) }
   }
 
   /// Bidirectional chat: send names, receive greetings.
@@ -531,7 +529,7 @@ public struct GreeterClient<C: BebopChannel>: Sendable {
     body: (
       _ send: @Sendable (HelloRequest) async throws -> Void,
       _ finish: @Sendable () async throws -> Void,
-      _ responses: AsyncThrowingStream<HelloReply, Error>
+      _ responses: StreamReply<HelloReply, C.Metadata>
     ) async throws -> Void
   ) async throws {
     let (rawSend, rawFinish, rawResponses) = try await channel.duplexStream(
@@ -542,7 +540,7 @@ public struct GreeterClient<C: BebopChannel>: Sendable {
       try await body(
         { try await rawSend($0.serializedData()) },
         rawFinish,
-        rawResponses.decode(HelloReply.self)
+        rawResponses.map { try HelloReply.decode(from: $0) }
       )
     } catch {
       try? await rawFinish()

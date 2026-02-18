@@ -1,8 +1,8 @@
 import Foundation
 import SwiftBebop
+import XPC
 
 /// Binary envelope for XPC messages. Layout: [kind: UInt8][callId: UInt32][payload...]
-/// Sent as raw `Data` over XPC (maps to xpc_data_t).
 struct RpcEnvelope: Sendable {
   static let headerSize = 5
 
@@ -38,6 +38,45 @@ struct RpcEnvelope: Sendable {
       let callId = try reader.readUInt32()
       let payload = try reader.readBytes(data.count - headerSize)
       return Self(callId: callId, kind: kind, payload: payload)
+    }
+  }
+
+  // MARK: - XPCDictionary transport
+
+  /// Pack envelope bytes into an XPCDictionary under the `"p"` key.
+  func toMessage() -> XPCDictionary {
+    let dict = XPCDictionary()
+    let data = toData()
+    dict.withUnsafeUnderlyingDictionary { xdict in
+      data.withUnsafeBytes { buf in
+        xpc_dictionary_set_data(xdict, "p", buf.baseAddress!, buf.count)
+      }
+    }
+    return dict
+  }
+
+  /// Decode envelope bytes from the `"p"` key of an XPCDictionary.
+  static func fromMessage(_ message: XPCDictionary) throws -> Self {
+    var result: Result<Self, any Error>?
+
+    message.withUnsafeUnderlyingDictionary { xdict in
+      var length = 0
+      guard let ptr = xpc_dictionary_get_data(xdict, "p", &length) else {
+        result = .failure(BebopRpcError(code: .internal, detail: "missing payload in XPC message"))
+        return
+      }
+      let data = Data(bytes: ptr, count: length)
+      do {
+        result = .success(try Self.decode(from: data))
+      } catch {
+        result = .failure(error)
+      }
+    }
+
+    switch result {
+    case .success(let envelope): return envelope
+    case .failure(let error): throw error
+    case nil: throw BebopRpcError(code: .internal, detail: "missing payload in XPC message")
     }
   }
 }
