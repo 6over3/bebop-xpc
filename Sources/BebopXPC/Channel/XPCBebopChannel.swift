@@ -10,9 +10,9 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
   // MARK: - Internal types
 
   private enum ActiveCall {
-    case unary(CheckedContinuation<Reply<[UInt8], XPCMessage.Reader>, any Error>)
+    case unary(CheckedContinuation<Response<[UInt8], XPCMessage.Reader>, any Error>)
     case stream(
-      AsyncThrowingStream<[UInt8], any Error>.Continuation,
+      AsyncThrowingStream<([UInt8], UInt64?), any Error>.Continuation,
       MetadataPromise
     )
   }
@@ -81,21 +81,21 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
   public func unary(
     method: UInt32,
     request: [UInt8],
-    options: CallOptions
-  ) async throws -> Reply<[UInt8], XPCMessage.Reader> {
-    if let deadline = options.deadline, deadline.isPast {
+    context: RpcContext
+  ) async throws -> Response<[UInt8], XPCMessage.Reader> {
+    if let deadline = context.deadline, deadline.isPast {
       throw BebopRpcError(code: .deadlineExceeded)
     }
     let callId = nextCallId()
-    let deadlineTask = options.deadline.map { enforceDeadline($0, forCall: callId) }
+    let deadlineTask = context.deadline.map { enforceDeadline($0, forCall: callId) }
     return try await withTaskCancellationHandler {
       defer { deadlineTask?.cancel() }
       return try await withCheckedThrowingContinuation { continuation in
         _state.withLock { $0.activeCalls[callId] = .unary(continuation) }
         do {
           let session = try self.session()
-          try sendHeader(callId: callId, method: method, options: options, via: session)
-          try sendFrame(callId: callId, bytes: FrameWriter.endStream(request), via: session)
+          try sendHeader(callId: callId, method: method, context: context, via: session)
+          try sendFrame(callId: callId, bytes: Frame(payload: request, flags: .endStream).encode(), via: session)
         } catch {
           deadlineTask?.cancel()
           if _state.withLock({ $0.activeCalls.removeValue(forKey: callId) }) != nil {
@@ -112,61 +112,61 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
   public func serverStream(
     method: UInt32,
     request: [UInt8],
-    options: CallOptions
-  ) async throws -> StreamReply<[UInt8], XPCMessage.Reader> {
-    if let deadline = options.deadline, deadline.isPast {
+    context: RpcContext
+  ) async throws -> StreamResponse<[UInt8], XPCMessage.Reader> {
+    if let deadline = context.deadline, deadline.isPast {
       throw BebopRpcError(code: .deadlineExceeded)
     }
     let callId = nextCallId()
     let promise = MetadataPromise()
-    let (stream, continuation) = AsyncThrowingStream.makeStream(of: [UInt8].self)
+    let (stream, continuation) = AsyncThrowingStream.makeStream(of: ([UInt8], UInt64?).self)
     _state.withLock { $0.activeCalls[callId] = .stream(continuation, promise) }
-    let deadlineTask = options.deadline.map { enforceDeadline($0, forCall: callId) }
+    let deadlineTask = context.deadline.map { enforceDeadline($0, forCall: callId) }
     continuation.onTermination = { @Sendable _ in
       deadlineTask?.cancel()
       self.removeCall(callId)
     }
     do {
       let session = try self.session()
-      try sendHeader(callId: callId, method: method, options: options, via: session)
-      try sendFrame(callId: callId, bytes: FrameWriter.endStream(request), via: session)
+      try sendHeader(callId: callId, method: method, context: context, via: session)
+      try sendFrame(callId: callId, bytes: Frame(payload: request, flags: .endStream).encode(), via: session)
     } catch {
       deadlineTask?.cancel()
       if _state.withLock({ $0.activeCalls.removeValue(forKey: callId) }) != nil {
         continuation.finish(throwing: error)
       }
     }
-    return StreamReply(stream: stream, trailing: { await promise.value })
+    return StreamResponse(stream: stream, trailing: { await promise.value })
   }
 
   public func clientStream(
     method: UInt32,
-    options: CallOptions
+    context: RpcContext
   ) async throws -> (
     send: @Sendable ([UInt8]) async throws -> Void,
-    finish: @Sendable () async throws -> Reply<[UInt8], XPCMessage.Reader>
+    finish: @Sendable () async throws -> Response<[UInt8], XPCMessage.Reader>
   ) {
-    if let deadline = options.deadline, deadline.isPast {
+    if let deadline = context.deadline, deadline.isPast {
       throw BebopRpcError(code: .deadlineExceeded)
     }
     let callId = nextCallId()
     let session = try self.session()
-    try sendHeader(callId: callId, method: method, options: options, via: session)
+    try sendHeader(callId: callId, method: method, context: context, via: session)
 
     let send: @Sendable ([UInt8]) async throws -> Void = { [weak self] payload in
       guard let self else { throw XPCError.notConnected }
       let s = try self.session()
-      try self.sendFrame(callId: callId, bytes: FrameWriter.data(payload), via: s)
+      try self.sendFrame(callId: callId, bytes: Frame(payload: payload, flags: []).encode(), via: s)
     }
 
-    let finish: @Sendable () async throws -> Reply<[UInt8], XPCMessage.Reader> = { [weak self] in
+    let finish: @Sendable () async throws -> Response<[UInt8], XPCMessage.Reader> = { [weak self] in
       guard let self else { throw XPCError.notConnected }
-      if let deadline = options.deadline, deadline.isPast {
+      if let deadline = context.deadline, deadline.isPast {
         throw BebopRpcError(code: .deadlineExceeded)
       }
       let s = try self.session()
-      try self.sendFrame(callId: callId, bytes: FrameWriter.endStream([]), via: s)
-      let deadlineTask = options.deadline.map { self.enforceDeadline($0, forCall: callId) }
+      try self.sendFrame(callId: callId, bytes: Frame(payload: [], flags: .endStream).encode(), via: s)
+      let deadlineTask = context.deadline.map { self.enforceDeadline($0, forCall: callId) }
       return try await withTaskCancellationHandler {
         defer { deadlineTask?.cancel() }
         return try await withCheckedThrowingContinuation { continuation in
@@ -183,20 +183,20 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
 
   public func duplexStream(
     method: UInt32,
-    options: CallOptions
+    context: RpcContext
   ) async throws -> (
     send: @Sendable ([UInt8]) async throws -> Void,
     finish: @Sendable () async throws -> Void,
-    responses: StreamReply<[UInt8], XPCMessage.Reader>
+    responses: StreamResponse<[UInt8], XPCMessage.Reader>
   ) {
-    if let deadline = options.deadline, deadline.isPast {
+    if let deadline = context.deadline, deadline.isPast {
       throw BebopRpcError(code: .deadlineExceeded)
     }
     let callId = nextCallId()
     let promise = MetadataPromise()
-    let (stream, continuation) = AsyncThrowingStream.makeStream(of: [UInt8].self)
+    let (stream, continuation) = AsyncThrowingStream.makeStream(of: ([UInt8], UInt64?).self)
     _state.withLock { $0.activeCalls[callId] = .stream(continuation, promise) }
-    let deadlineTask = options.deadline.map { enforceDeadline($0, forCall: callId) }
+    let deadlineTask = context.deadline.map { enforceDeadline($0, forCall: callId) }
     continuation.onTermination = { @Sendable _ in
       deadlineTask?.cancel()
       self.removeCall(callId)
@@ -204,7 +204,7 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
 
     do {
       let session = try self.session()
-      try sendHeader(callId: callId, method: method, options: options, via: session)
+      try sendHeader(callId: callId, method: method, context: context, via: session)
     } catch {
       deadlineTask?.cancel()
       if _state.withLock({ $0.activeCalls.removeValue(forKey: callId) }) != nil {
@@ -216,16 +216,16 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
     let send: @Sendable ([UInt8]) async throws -> Void = { [weak self] payload in
       guard let self else { throw XPCError.notConnected }
       let s = try self.session()
-      try self.sendFrame(callId: callId, bytes: FrameWriter.data(payload), via: s)
+      try self.sendFrame(callId: callId, bytes: Frame(payload: payload, flags: []).encode(), via: s)
     }
 
     let finish: @Sendable () async throws -> Void = { [weak self] in
       guard let self else { throw XPCError.notConnected }
       let s = try self.session()
-      try self.sendFrame(callId: callId, bytes: FrameWriter.endStream([]), via: s)
+      try self.sendFrame(callId: callId, bytes: Frame(payload: [], flags: .endStream).encode(), via: s)
     }
 
-    return (send: send, finish: finish, responses: StreamReply(stream: stream, trailing: { await promise.value }))
+    return (send: send, finish: finish, responses: StreamResponse(stream: stream, trailing: { await promise.value }))
   }
 
   // MARK: - Session creation
@@ -348,15 +348,14 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
       return
     }
 
-    // endStream (with or without payload) completes the call
     if frame.isEndStream {
       let call = _state.withLock { $0.activeCalls.removeValue(forKey: callId) }
       switch call {
       case .unary(let continuation):
-        continuation.resume(returning: Reply(value: frame.payload, metadata: reader))
+        continuation.resume(returning: Response(value: frame.payload, metadata: reader))
       case .stream(let continuation, let promise):
         if !frame.payload.isEmpty {
-          continuation.yield(frame.payload)
+          continuation.yield((frame.payload, frame.cursor))
         }
         promise.resolve(reader)
         continuation.finish()
@@ -370,13 +369,12 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
     let call = _state.withLock { $0.activeCalls[callId] }
     switch call {
     case .unary(let continuation):
-      // Unary should not receive non-endStream data frames
       _ = _state.withLock { $0.activeCalls.removeValue(forKey: callId) }
       continuation.resume(
         throwing: BebopRpcError(code: .internal, detail: "unexpected data frame in unary response"))
     case .stream(let continuation, _):
       if !frame.payload.isEmpty {
-        continuation.yield(frame.payload)
+        continuation.yield((frame.payload, frame.cursor))
       }
     case nil:
       break
@@ -432,13 +430,14 @@ public final class XPCBebopChannel: BebopChannel, @unchecked Sendable {
   private func sendHeader(
     callId: UInt32,
     method: UInt32,
-    options: CallOptions,
+    context: RpcContext,
     via session: XPCSession
   ) throws {
     let header = CallHeader(
       methodId: method,
-      deadline: options.deadline,
-      metadata: options.metadata.isEmpty ? nil : options.metadata
+      deadline: context.deadline,
+      metadata: context.metadata.isEmpty ? nil : context.metadata,
+      cursor: context.cursor != 0 ? context.cursor : nil
     )
     let bytes = header.serializedData()
     let envelope = RpcEnvelope.header(callId: callId, payload: bytes)

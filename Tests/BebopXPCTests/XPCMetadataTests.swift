@@ -7,24 +7,22 @@ import XPC
 
 struct MetadataGreeter: GreeterHandler {
   func sayHello(
-    _ request: HelloRequest, context: some CallContext
+    _ request: HelloRequest, context: RpcContext
   ) async throws -> HelloReply {
-    guard let ctx = context as? XPCCallContext else {
-      throw BebopRpcError(code: .internal, detail: "wrong context type")
-    }
+    let reader = context[XPCMessageKey.self]
 
     // Read custom string from inbound XPC dict
-    let custom = ctx.message?.string("custom") ?? "missing"
+    let custom = reader?.string("custom") ?? "missing"
 
     // Read fd from inbound XPC dict, write a marker byte, close it
-    if let fd = ctx.message?.fileDescriptor("pipe") {
+    if let fd = reader?.fileDescriptor("pipe") {
       let byte: UInt8 = 0xAB
       _ = withUnsafePointer(to: byte) { Darwin.write(fd, $0, 1) }
       Darwin.close(fd)
     }
 
     // Attach custom data to the response XPC dict
-    ctx.prepareResponse { writer in
+    context[XPCResponsePreparerKey.self] = { writer in
       writer.setString("echo", custom)
       writer.setInt64("code", 42)
     }
@@ -33,12 +31,9 @@ struct MetadataGreeter: GreeterHandler {
   }
 
   func streamTicks(
-    _ request: TickRequest, context: some CallContext
+    _ request: TickRequest, context: RpcContext
   ) async throws -> AsyncThrowingStream<TickReply, Error> {
-    guard let ctx = context as? XPCCallContext else {
-      throw BebopRpcError(code: .internal)
-    }
-    ctx.prepareResponse { writer in
+    context[XPCResponsePreparerKey.self] = { writer in
       writer.setUInt64("total", UInt64(request.count))
     }
     return AsyncThrowingStream { c in
@@ -51,7 +46,7 @@ struct MetadataGreeter: GreeterHandler {
 
   func uploadLogs(
     _ requests: AsyncThrowingStream<LogEntry, Error>,
-    context: some CallContext
+    context: RpcContext
   ) async throws -> LogSummary {
     var count: UInt32 = 0
     for try await _ in requests { count += 1 }
@@ -60,14 +55,14 @@ struct MetadataGreeter: GreeterHandler {
 
   func chat(
     _ requests: AsyncThrowingStream<HelloRequest, Error>,
-    context: some CallContext
+    context: RpcContext
   ) async throws -> AsyncThrowingStream<HelloReply, Error> {
     fatalError()
   }
 }
 
 func makeMetadataPair() throws -> (server: XPCBebopServer, client: GreeterClient<XPCBebopChannel>) {
-  let builder = BebopRouterBuilder<XPCCallContext>()
+  let builder = BebopRouterBuilder()
   builder.register(greeter: MetadataGreeter())
   let server = XPCBebopServer(router: builder.build())
   let endpoint = try server.listenAnonymous()
@@ -91,7 +86,7 @@ func makeMetadataPair() throws -> (server: XPCBebopServer, client: GreeterClient
       try await client.sayHello(name: "test")
     }
 
-    // Server echoed the custom string back via prepareResponse
+    // Server echoed the custom string back via XPCResponsePreparerKey
     #expect(reply.metadata.string("echo") == "hello-from-client")
     #expect(reply.metadata.int64("code") == 42)
     #expect(reply.value.greeting == "Hello, test!")

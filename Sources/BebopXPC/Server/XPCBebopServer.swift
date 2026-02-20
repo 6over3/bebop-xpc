@@ -6,12 +6,13 @@ import XPC
 /// Server-side XPC listener that routes incoming BebopRPC calls through a BebopRouter.
 public final class XPCBebopServer: @unchecked Sendable {
 
-  private let router: BebopRouter<XPCCallContext>
+  private let router: BebopRouter
   private let security: SecurityPolicy
   private let _listener = Mutex<XPCListener?>(nil)
   private let _connections = Mutex<[ConnectionBox]>([])
+  private let _serviceName = Mutex<String?>(nil)
 
-  public init(router: BebopRouter<XPCCallContext>, security: SecurityPolicy = .none) {
+  public init(router: BebopRouter, security: SecurityPolicy = .none) {
     self.router = router
     self.security = security
   }
@@ -19,6 +20,7 @@ public final class XPCBebopServer: @unchecked Sendable {
   // MARK: - Public listen methods
 
   public func listen(service name: String) throws {
+    _serviceName.withLock { $0 = name }
     let listener = try createListener(name: name)
     _listener.withLock { $0 = listener }
   }
@@ -64,8 +66,35 @@ public final class XPCBebopServer: @unchecked Sendable {
   // MARK: - Per-connection state
 
   private final class ConnectionBox: Sendable {
+    let localAddress: String?
+    let _peerInfo = Mutex<PeerInfo?>(nil)
     let collectors = Mutex<[UInt32: FrameCollector]>([:])
     let session = Mutex<XPCSession?>(nil)
+
+    init(localAddress: String?) {
+      self.localAddress = localAddress
+    }
+
+    func peerInfo(from message: XPCDictionary) -> PeerInfo {
+      if let existing = _peerInfo.withLock({ $0 }) {
+        return existing
+      }
+      let info = message.withUnsafeUnderlyingDictionary { xdict -> PeerInfo in
+        guard let conn = xpc_dictionary_get_remote_connection(xdict) else {
+          return PeerInfo(localAddress: localAddress)
+        }
+        let pid = xpc_connection_get_pid(conn)
+        let uid = xpc_connection_get_euid(conn)
+        let gid = xpc_connection_get_egid(conn)
+        return PeerInfo(
+          remoteAddress: "pid:\(pid)",
+          localAddress: localAddress,
+          authInfo: XPCAuthInfo(pid: pid, uid: uid, gid: gid)
+        )
+      }
+      _peerInfo.withLock { $0 = info }
+      return info
+    }
   }
 
   // MARK: - Connection acceptance
@@ -73,7 +102,7 @@ public final class XPCBebopServer: @unchecked Sendable {
   private func acceptConnection(
     _ request: XPCListener.IncomingSessionRequest
   ) -> XPCListener.IncomingSessionRequest.Decision {
-    let box = ConnectionBox()
+    let box = ConnectionBox(localAddress: _serviceName.withLock { $0 })
     let router = self.router
     _connections.withLock { $0.append(box) }
 
@@ -95,12 +124,14 @@ public final class XPCBebopServer: @unchecked Sendable {
             XPCMessage.Reader(xdict)
           }
 
-          let ctx = XPCCallContext(
+          let ctx = RpcContext(
             methodId: methodId,
             metadata: header.metadata ?? [:],
             deadline: header.deadline,
-            message: reader
+            cursor: header.cursor ?? 0
           )
+          ctx[XPCMessageKey.self] = reader
+          ctx[PeerInfoKey.self] = box.peerInfo(from: message)
 
           let collector = FrameCollector()
           box.collectors.withLock { $0[envelope.callId] = collector }
@@ -155,18 +186,18 @@ public final class XPCBebopServer: @unchecked Sendable {
   private func dispatchCall(
     callId: UInt32,
     header: CallHeader,
-    ctx: XPCCallContext,
+    ctx: RpcContext,
     collector: FrameCollector,
     session: XPCSession,
     box: ConnectionBox,
-    router: BebopRouter<XPCCallContext>
+    router: BebopRouter
   ) async {
     defer { box.collectors.withLock { $0[callId] = nil } }
 
+    let writer = makeFrameWriter(callId: callId, session: session, ctx: ctx)
+
     if let deadline = header.deadline, deadline.isPast {
-      try? sendError(
-        callId: callId, to: session,
-        error: BebopRpcError(code: .deadlineExceeded))
+      try? await writer.error(BebopRpcError(code: .deadlineExceeded))
       return
     }
 
@@ -175,25 +206,21 @@ public final class XPCBebopServer: @unchecked Sendable {
         if let deadline = header.deadline {
           try await withDeadline(deadline) {
             try await self.executeMethod(
-              callId: callId, methodId: ctx.methodId, ctx: ctx,
-              collector: collector, session: session, router: router
+              ctx: ctx, collector: collector, writer: writer, router: router
             )
           }
         } else {
           try await executeMethod(
-            callId: callId, methodId: ctx.methodId, ctx: ctx,
-            collector: collector, session: session, router: router
+            ctx: ctx, collector: collector, writer: writer, router: router
           )
         }
       } catch let error as BebopRpcError {
-        try? sendError(callId: callId, to: session, error: error)
+        try? await writer.error(error)
       } catch is CancellationError {
-        try? sendError(callId: callId, to: session, error: BebopRpcError(code: .cancelled))
+        try? await writer.error(BebopRpcError(code: .cancelled))
       } catch {
-        try? sendError(
-          callId: callId, to: session,
-          error: BebopRpcError(code: .internal, detail: String(describing: error))
-        )
+        try? await writer.error(
+          BebopRpcError(code: .internal, detail: String(describing: error)))
       }
     } onCancel: {
       ctx.cancel()
@@ -201,18 +228,28 @@ public final class XPCBebopServer: @unchecked Sendable {
   }
 
   private func executeMethod(
-    callId: UInt32,
-    methodId: UInt32,
-    ctx: XPCCallContext,
+    ctx: RpcContext,
     collector: FrameCollector,
-    session: XPCSession,
-    router: BebopRouter<XPCCallContext>
+    writer: FrameWriter,
+    router: BebopRouter
   ) async throws {
-    if methodId <= 1 {
+    let methodId = ctx.methodId
+
+    // Reserved unary methods: discovery (0), batch (1), dispatch (2), cancel (4)
+    switch methodId {
+    case BebopReservedMethod.discovery, BebopReservedMethod.batch,
+         BebopReservedMethod.dispatch, BebopReservedMethod.cancel:
       let payload = try await readOnePayload(from: collector)
       let response = try await router.unary(methodId: methodId, payload: payload, ctx: ctx)
-      try sendResponse(callId: callId, to: session, payload: response, ctx: ctx)
+      try await writer.writeUnary(response, metadata: ctx.responseMetadata)
       return
+    case BebopReservedMethod.resolve:
+      let payload = try await readOnePayload(from: collector)
+      let stream = try await router.serverStream(methodId: methodId, payload: payload, ctx: ctx)
+      try await writer.drainServerStream(stream, metadata: { ctx.responseMetadata })
+      return
+    default:
+      break
     }
 
     guard let type = router.methodType(for: methodId) else {
@@ -223,15 +260,12 @@ public final class XPCBebopServer: @unchecked Sendable {
     case .unary:
       let payload = try await readOnePayload(from: collector)
       let response = try await router.unary(methodId: methodId, payload: payload, ctx: ctx)
-      try sendResponse(callId: callId, to: session, payload: response, ctx: ctx)
+      try await writer.writeUnary(response, metadata: ctx.responseMetadata)
 
     case .serverStream:
       let payload = try await readOnePayload(from: collector)
       let stream = try await router.serverStream(methodId: methodId, payload: payload, ctx: ctx)
-      for try await chunk in stream {
-        try sendFrame(callId: callId, to: session, bytes: FrameWriter.data(chunk))
-      }
-      try sendEndOfStream(callId: callId, to: session, ctx: ctx)
+      try await writer.drainServerStream(stream, metadata: { ctx.responseMetadata })
 
     case .clientStream:
       let (send, finish) = try await router.clientStream(methodId: methodId, ctx: ctx)
@@ -239,7 +273,7 @@ public final class XPCBebopServer: @unchecked Sendable {
         try await send(payload)
       }
       let response = try await finish()
-      try sendResponse(callId: callId, to: session, payload: response, ctx: ctx)
+      try await writer.writeUnary(response, metadata: ctx.responseMetadata)
 
     case .duplexStream:
       let (send, finish, responses) = try await router.duplexStream(methodId: methodId, ctx: ctx)
@@ -251,11 +285,8 @@ public final class XPCBebopServer: @unchecked Sendable {
           }
           try await finish()
         }
-        group.addTask { [self] in
-          for try await chunk in responses {
-            try self.sendFrame(callId: callId, to: session, bytes: FrameWriter.data(chunk))
-          }
-          try self.sendEndOfStream(callId: callId, to: session, ctx: ctx)
+        group.addTask {
+          try await writer.drainServerStream(responses, metadata: { ctx.responseMetadata })
         }
         try await group.waitForAll()
       }
@@ -274,43 +305,25 @@ public final class XPCBebopServer: @unchecked Sendable {
     return []
   }
 
-  private func sendMessage(_ envelope: RpcEnvelope, to session: XPCSession) throws {
-    try session.send(message: envelope.toMessage())
+  /// Build a FrameWriter that sends via XPC and applies response metadata on final frames.
+  private func makeFrameWriter(
+    callId: UInt32, session: XPCSession, ctx: RpcContext
+  ) -> FrameWriter {
+    FrameWriter { bytes, flags in
+      let envelope = RpcEnvelope.frame(callId: callId, payload: bytes)
+      if flags.contains(.endStream) {
+        let dict = envelope.toMessage()
+        self.applyResponseMetadata(dict, ctx: ctx)
+        try session.send(message: dict)
+      } else {
+        try session.send(message: envelope.toMessage())
+      }
+    }
   }
 
-  private func sendFrame(callId: UInt32, to session: XPCSession, bytes: [UInt8]) throws {
-    let envelope = RpcEnvelope.frame(callId: callId, payload: bytes)
-    try sendMessage(envelope, to: session)
-  }
-
-  private func sendError(callId: UInt32, to session: XPCSession, error: BebopRpcError) throws {
-    let bytes = FrameWriter.error(error)
-    try sendFrame(callId: callId, to: session, bytes: bytes)
-  }
-
-  private func sendResponse(
-    callId: UInt32, to session: XPCSession, payload: [UInt8], ctx: XPCCallContext
-  ) throws {
-    let bytes = FrameWriter.endStream(payload)
-    let envelope = RpcEnvelope.frame(callId: callId, payload: bytes)
-    let dict = envelope.toMessage()
-    applyResponseMetadata(dict, ctx: ctx)
-    try session.send(message: dict)
-  }
-
-  private func sendEndOfStream(
-    callId: UInt32, to session: XPCSession, ctx: XPCCallContext
-  ) throws {
-    let bytes = FrameWriter.endStream([])
-    let envelope = RpcEnvelope.frame(callId: callId, payload: bytes)
-    let dict = envelope.toMessage()
-    applyResponseMetadata(dict, ctx: ctx)
-    try session.send(message: dict)
-  }
-
-  private func applyResponseMetadata(_ dict: XPCDictionary, ctx: XPCCallContext) {
+  private func applyResponseMetadata(_ dict: XPCDictionary, ctx: RpcContext) {
     let metadata = ctx.responseMetadata
-    let prepareResponse = ctx.responsePreparer
+    let prepareResponse = ctx[XPCResponsePreparerKey.self]
     guard !metadata.isEmpty || prepareResponse != nil else { return }
     dict.withUnsafeUnderlyingDictionary { xdict in
       let writer = XPCMessage.Writer(xdict)

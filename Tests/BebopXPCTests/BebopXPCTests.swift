@@ -116,63 +116,10 @@ import Testing
   }
 }
 
-@Suite struct XPCCallContextTests {
-  @Test func initStoresValues() {
-    let metadata = ["key": "value", "auth": "token"]
-    let deadline = BebopTimestamp(seconds: 1_234_567_890, nanoseconds: 500_000_000)
-    let context = XPCCallContext(methodId: 42, metadata: metadata, deadline: deadline)
-
-    #expect(context.methodId == 42)
-    #expect(context.requestMetadata == metadata)
-    #expect(context.deadline == deadline)
-  }
-
-  @Test func isCancelledStartsFalse() {
-    let context = XPCCallContext(methodId: 1, metadata: [:], deadline: nil)
-    #expect(context.isCancelled == false)
-  }
-
-  @Test func cancelSetsCancelledTrue() {
-    let context = XPCCallContext(methodId: 1, metadata: [:], deadline: nil)
-    context.cancel()
-    #expect(context.isCancelled == true)
-  }
-
-  @Test func setResponseMetadataStoresValues() {
-    let context = XPCCallContext(methodId: 1, metadata: [:], deadline: nil)
-    context.setResponseMetadata("status", "ok")
-    context.setResponseMetadata("count", "5")
-
-    let metadata = context.responseMetadata
-    #expect(metadata["status"] == "ok")
-    #expect(metadata["count"] == "5")
-  }
-
-  @Test func responseMetadataReturnsSetValues() {
-    let context = XPCCallContext(methodId: 1, metadata: [:], deadline: nil)
-    #expect(context.responseMetadata.isEmpty)
-
-    context.setResponseMetadata("a", "1")
-    #expect(context.responseMetadata == ["a": "1"])
-
-    context.setResponseMetadata("b", "2")
-    #expect(context.responseMetadata == ["a": "1", "b": "2"])
-  }
-
-  @Test func setResponseMetadataOverwritesExisting() {
-    let context = XPCCallContext(methodId: 1, metadata: [:], deadline: nil)
-    context.setResponseMetadata("key", "first")
-    context.setResponseMetadata("key", "second")
-
-    #expect(context.responseMetadata["key"] == "second")
-  }
-}
-
 @Suite struct FrameCollectorTests {
   @Test func receiveDataFrameYieldsPayload() async throws {
     let collector = FrameCollector()
-    let dataBytes = FrameWriter.data([1, 2, 3])
-    let frame = try Frame.decode(from: dataBytes)
+    let frame = Frame(payload: [1, 2, 3], flags: [])
 
     collector.receive(frame)
 
@@ -188,8 +135,7 @@ import Testing
 
   @Test func receiveEndStreamFrameFinishes() async throws {
     let collector = FrameCollector()
-    let endBytes = FrameWriter.endStream([4, 5])
-    let frame = try Frame.decode(from: endBytes)
+    let frame = Frame(payload: [4, 5], flags: .endStream)
 
     collector.receive(frame)
 
@@ -205,18 +151,9 @@ import Testing
   @Test func receiveMultipleDataThenEndStream() async throws {
     let collector = FrameCollector()
 
-    let data1Bytes = FrameWriter.data([1, 2])
-    let frame1 = try Frame.decode(from: data1Bytes)
-
-    let data2Bytes = FrameWriter.data([3, 4])
-    let frame2 = try Frame.decode(from: data2Bytes)
-
-    let endBytes = FrameWriter.endStream([5])
-    let endFrame = try Frame.decode(from: endBytes)
-
-    collector.receive(frame1)
-    collector.receive(frame2)
-    collector.receive(endFrame)
+    collector.receive(Frame(payload: [1, 2], flags: []))
+    collector.receive(Frame(payload: [3, 4], flags: []))
+    collector.receive(Frame(payload: [5], flags: .endStream))
 
     var payloads: [[UInt8]] = []
     for try await payload in collector.payloads {
@@ -247,8 +184,8 @@ import Testing
 
   @Test func receiveErrorFrameThrows() async throws {
     let collector = FrameCollector()
-    let errBytes = FrameWriter.error(BebopRpcError(code: .internal))
-    let frame = try Frame.decode(from: errBytes)
+    let errPayload = BebopRpcError(code: .internal).toWire().serializedData()
+    let frame = Frame(payload: errPayload, flags: [.endStream, .error])
 
     collector.receive(frame)
 
@@ -267,14 +204,8 @@ import Testing
   @Test func emptyPayloadNotYielded() async throws {
     let collector = FrameCollector()
 
-    let emptyData = FrameWriter.data([])
-    let emptyFrame = try Frame.decode(from: emptyData)
-
-    let endBytes = FrameWriter.endStream([])
-    let endFrame = try Frame.decode(from: endBytes)
-
-    collector.receive(emptyFrame)
-    collector.receive(endFrame)
+    collector.receive(Frame(payload: [], flags: []))
+    collector.receive(Frame(payload: [], flags: .endStream))
 
     var payloads: [[UInt8]] = []
     for try await payload in collector.payloads {

@@ -8,13 +8,13 @@ import XPC
 
 struct TestGreeter: GreeterHandler {
   func sayHello(
-    _ request: HelloRequest, context: some CallContext
+    _ request: HelloRequest, context: RpcContext
   ) async throws -> HelloReply {
     HelloReply(greeting: "Hello, \(request.name)!")
   }
 
   func streamTicks(
-    _ request: TickRequest, context: some CallContext
+    _ request: TickRequest, context: RpcContext
   ) async throws -> AsyncThrowingStream<TickReply, Error> {
     AsyncThrowingStream { c in
       for i: UInt32 in 0..<request.count {
@@ -26,7 +26,7 @@ struct TestGreeter: GreeterHandler {
 
   func uploadLogs(
     _ requests: AsyncThrowingStream<LogEntry, Error>,
-    context: some CallContext
+    context: RpcContext
   ) async throws -> LogSummary {
     var lines: [String] = []
     for try await entry in requests {
@@ -37,7 +37,7 @@ struct TestGreeter: GreeterHandler {
 
   func chat(
     _ requests: AsyncThrowingStream<HelloRequest, Error>,
-    context: some CallContext
+    context: RpcContext
   ) async throws -> AsyncThrowingStream<HelloReply, Error> {
     let (stream, continuation) = AsyncThrowingStream.makeStream(of: HelloReply.self)
     Task {
@@ -57,7 +57,7 @@ struct TestGreeter: GreeterHandler {
 // MARK: - Test infrastructure
 
 func makeGreeterPair() throws -> (server: XPCBebopServer, client: GreeterClient<XPCBebopChannel>) {
-  let builder = BebopRouterBuilder<XPCCallContext>()
+  let builder = BebopRouterBuilder()
   builder.register(greeter: TestGreeter())
   let router = builder.build()
 
@@ -146,7 +146,7 @@ func makeGreeterPair() throws -> (server: XPCBebopServer, client: GreeterClient<
       _ = try await client.channel.unary(
         method: 0xDEAD_BEEF,
         request: HelloRequest(name: "x").serializedData(),
-        options: .default
+        context: RpcContext()
       )
       Issue.record("Expected error for unknown method")
     } catch let error as BebopRpcError {

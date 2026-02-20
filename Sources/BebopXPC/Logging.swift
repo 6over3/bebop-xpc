@@ -1,6 +1,6 @@
 import OSLog
 
 enum Log {
-  static let connection = Logger(subsystem: "dev.bebop.xpc", category: "connection")
-  static let rpc = Logger(subsystem: "dev.bebop.xpc", category: "rpc")
+  static let connection = Logger(subsystem: "sh.bebop.xpc", category: "connection")
+  static let rpc = Logger(subsystem: "sh.bebop.xpc", category: "rpc")
 }

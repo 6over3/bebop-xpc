@@ -8,7 +8,7 @@ let serviceName = "com.bebop.example.exif"
 struct ExifHandler: ExifServiceHandler {
   let exif = try! Exif()
 
-  func read(_ request: ReadRequest, context: some CallContext) async throws -> ReadResponse {
+  func read(_ request: ReadRequest, context: RpcContext) async throws -> ReadResponse {
     do {
       let url = URL(fileURLWithPath: request.path)
       let json = try await exif.read(from: url)
@@ -20,7 +20,7 @@ struct ExifHandler: ExifServiceHandler {
 }
 
 func runServer() throws {
-  let builder = BebopRouterBuilder<XPCCallContext>()
+  let builder = BebopRouterBuilder()
   builder.register(exifService: ExifHandler())
   let server = XPCBebopServer(router: builder.build())
   try server.listen(machService: serviceName)
