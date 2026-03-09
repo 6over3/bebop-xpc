@@ -61,7 +61,7 @@ struct MetadataGreeter: GreeterHandler {
   }
 }
 
-func makeMetadataPair() throws -> (server: XPCBebopServer, client: GreeterClient<XPCBebopChannel>) {
+func makeMetadataPair() throws -> (server: XPCBebopServer<FutureStore>, client: GreeterClient<XPCBebopChannel>) {
   let builder = BebopRouterBuilder()
   builder.register(greeter: MetadataGreeter())
   let server = XPCBebopServer(router: builder.build())

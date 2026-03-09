@@ -9,7 +9,7 @@ let package = Package(
     .executable(name: "ExifServiceExample", targets: ["ExifServiceExample"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/6over3/bebop-next", branch: "rpc"),
+    .package(url: "https://github.com/6over3/bebop-next", branch: "main"),
     .package(url: "https://github.com/6over3/libexif", branch: "main"),
   ],
   targets: [

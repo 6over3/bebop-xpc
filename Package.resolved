@@ -1,13 +1,13 @@
 {
-  "originHash" : "82929ac70444b088e4888802504e4569aaedb14741dff1d7fec6eb349375ea6d",
+  "originHash" : "e9f9c08e10af99fa1bcfd957e9131ff4351124d3114b72b6540dd99a4297d00c",
   "pins" : [
     {
       "identity" : "bebop-next",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/6over3/bebop-next",
       "state" : {
-        "branch" : "rpc",
-        "revision" : "3fad322cc65f4ec5a7c45c7daa3799b12d7f92f1"
+        "branch" : "main",
+        "revision" : "0a2e3e1a549c8f72d7724489cb6dfe9ca95cd67e"
       }
     },
     {

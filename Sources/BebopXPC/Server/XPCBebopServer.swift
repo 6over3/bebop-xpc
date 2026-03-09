@@ -4,15 +4,15 @@ import Synchronization
 import XPC
 
 /// Server-side XPC listener that routes incoming BebopRPC calls through a BebopRouter.
-public final class XPCBebopServer: @unchecked Sendable {
+public final class XPCBebopServer<Store: FutureStorage>: @unchecked Sendable {
 
-  private let router: BebopRouter
+  private let router: BebopRouter<Store>
   private let security: SecurityPolicy
   private let _listener = Mutex<XPCListener?>(nil)
   private let _connections = Mutex<[ConnectionBox]>([])
   private let _serviceName = Mutex<String?>(nil)
 
-  public init(router: BebopRouter, security: SecurityPolicy = .none) {
+  public init(router: BebopRouter<Store>, security: SecurityPolicy = .none) {
     self.router = router
     self.security = security
   }
@@ -190,7 +190,7 @@ public final class XPCBebopServer: @unchecked Sendable {
     collector: FrameCollector,
     session: XPCSession,
     box: ConnectionBox,
-    router: BebopRouter
+    router: BebopRouter<Store>
   ) async {
     defer { box.collectors.withLock { $0[callId] = nil } }
 
@@ -231,7 +231,7 @@ public final class XPCBebopServer: @unchecked Sendable {
     ctx: RpcContext,
     collector: FrameCollector,
     writer: FrameWriter,
-    router: BebopRouter
+    router: BebopRouter<Store>
   ) async throws {
     let methodId = ctx.methodId
 

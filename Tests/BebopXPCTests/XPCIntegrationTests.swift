@@ -56,7 +56,7 @@ struct TestGreeter: GreeterHandler {
 
 // MARK: - Test infrastructure
 
-func makeGreeterPair() throws -> (server: XPCBebopServer, client: GreeterClient<XPCBebopChannel>) {
+func makeGreeterPair() throws -> (server: XPCBebopServer<FutureStore>, client: GreeterClient<XPCBebopChannel>) {
   let builder = BebopRouterBuilder()
   builder.register(greeter: TestGreeter())
   let router = builder.build()
